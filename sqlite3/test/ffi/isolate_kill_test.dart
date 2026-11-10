@@ -29,6 +29,12 @@ void main() {
 
 void _prepareAndCloseForever(SendPort ready) {
   final db = sqlite3.openInMemory();
+  // Prepare and close one statement before the kill can arrive, so that the
+  // isolate registers the statement finalizer up front. Killing an isolate
+  // while it registers a finalizer can crash the VM during isolate shutdown
+  // (https://dart-review.googlesource.com/c/sdk/+/TBD), which is a different
+  // bug from the one tested here.
+  db.prepare('SELECT 1').close();
   ready.send(null);
   for (var i = 0; ; i++) {
     final stmt = db.prepare('SELECT ?');

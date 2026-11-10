@@ -9,50 +9,35 @@ permissions:
   contents: read
 
 jobs:
-  variants:
+  test-loop:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - variant: dbcycle
-            lib: before-pr
-          - variant: dbcycle
-            lib: current
-          - variant: dart_finalizer
-            lib: current
-          - variant: raw_openclose
-            lib: current
-          - variant: raw_nativefin
-            lib: current
-    name: windows / ${{ matrix.variant }} / ${{ matrix.lib }}
-    runs-on: windows-latest
+        os: [windows-latest, macos-latest]
+        dart: [stable, dev]
+    name: ${{ matrix.os }} / Dart ${{ matrix.dart }} / warmed-up test x120
+    runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v7
       with:
         persist-credentials: false
-        fetch-depth: 0
-    - name: Use library code from before the finalizer PR
-      if: matrix.lib == 'before-pr'
-      shell: bash
-      run: git checkout e8378dd -- sqlite3/lib
     - uses: dart-lang/setup-dart@v1
       with:
-        sdk: stable
+        sdk: ${{ matrix.dart }}
     - run: dart pub get
     - name: Use system SQLite
       run: dart run tool/hook_overrides.dart system-os-specific
-    - name: Kill loop, 6 runs of 5000 kills
+    - name: Run the isolate kill test 120 times
       shell: bash
       working-directory: sqlite3/
       run: |
-        crashes=0
-        for i in $(seq 1 6); do
-          if ! dart run tool/isolate_kill_repro.dart ${{ matrix.variant }} 5000 > run_$i.txt 2>&1; then
-            crashes=$((crashes+1))
-            echo "::warning::run $i crashed"
-            grep -a -A8 "CRASH" run_$i.txt || tail -15 run_$i.txt
-          else
-            tail -1 run_$i.txt
+        fails=0
+        for i in $(seq 1 120); do
+          if ! dart test test/ffi/isolate_kill_test.dart > out_$i.txt 2>&1; then
+            fails=$((fails+1))
+            echo "::warning::run $i failed"
+            grep -a -A10 "CRASH" out_$i.txt || tail -20 out_$i.txt
           fi
         done
-        echo "RESULT ${{ matrix.variant }}/${{ matrix.lib }}: $crashes of 6 runs crashed (30000 kills)"
+        echo "RESULT ${{ matrix.os }}/${{ matrix.dart }}: $fails of 120 runs failed"
+        test "$fails" = 0
