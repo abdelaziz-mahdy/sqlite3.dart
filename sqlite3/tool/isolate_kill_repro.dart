@@ -3,6 +3,7 @@
 //
 //   dart run tool/isolate_kill_repro.dart <variant> <kills>
 import 'dart:ffi';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
 
@@ -71,7 +72,73 @@ void _dbCycle(SendPort ready) {
   }
 }
 
+final class _Box {}
+
+final _dartFinalizer = Finalizer<Object>((_) {});
+
+void _dartFinalizerChurn(SendPort ready) {
+  ready.send(null);
+  for (;;) {
+    final box = _Box();
+    final token = Object();
+    _dartFinalizer.attach(box, Object(), detach: token);
+    _dartFinalizer.detach(token);
+  }
+}
+
+typedef _OpenC = Int Function(
+    Pointer<Utf8>, Pointer<Pointer<Void>>, Int, Pointer<Utf8>);
+typedef _OpenD = int Function(
+    Pointer<Utf8>, Pointer<Pointer<Void>>, int, Pointer<Utf8>);
+typedef _CloseC = Int Function(Pointer<Void>);
+typedef _CloseD = int Function(Pointer<Void>);
+
+DynamicLibrary _systemSqlite() {
+  if (Platform.isWindows) return DynamicLibrary.open('winsqlite3.dll');
+  if (Platform.isMacOS) return DynamicLibrary.open('libsqlite3.dylib');
+  return DynamicLibrary.open('libsqlite3.so.0');
+}
+
+final class _RawDb implements Finalizable {
+  final Pointer<Void> db;
+  _RawDb(this.db);
+}
+
+void _rawOpenClose(SendPort ready) {
+  final lib = _systemSqlite();
+  final open = lib.lookupFunction<_OpenC, _OpenD>('sqlite3_open_v2');
+  final close = lib.lookupFunction<_CloseC, _CloseD>('sqlite3_close_v2');
+  final name = ':memory:'.toNativeUtf8();
+  final out = malloc<Pointer<Void>>();
+  ready.send(null);
+  for (;;) {
+    open(name, out, 6, nullptr);
+    close(out.value);
+  }
+}
+
+void _rawNativeFin(SendPort ready) {
+  final lib = _systemSqlite();
+  final open = lib.lookupFunction<_OpenC, _OpenD>('sqlite3_open_v2');
+  final close = lib.lookupFunction<_CloseC, _CloseD>('sqlite3_close_v2');
+  final finalizer = NativeFinalizer(lib.lookup('sqlite3_close_v2').cast());
+  final name = ':memory:'.toNativeUtf8();
+  final out = malloc<Pointer<Void>>();
+  ready.send(null);
+  for (;;) {
+    open(name, out, 6, nullptr);
+    final raw = _RawDb(out.value);
+    final token = Object();
+    finalizer.attach(raw, raw.db, detach: token);
+    finalizer.detach(token);
+    close(raw.db);
+  }
+}
+
 const _variants = <String, void Function(SendPort)>{
+  'dart_finalizer': _dartFinalizerChurn,
+  'raw_openclose': _rawOpenClose,
+  'raw_nativefin': _rawNativeFin,
   'pure': _pure,
   'ffi_finalizer': _ffiFinalizer,
   'exec': _exec,

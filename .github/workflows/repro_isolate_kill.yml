@@ -13,25 +13,38 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [pure, ffi_finalizer, exec, prepclose, prepleak, dbcycle]
-        sqlite: [system-os-specific]
-    name: windows / ${{ matrix.variant }}
+        include:
+          - variant: dbcycle
+            lib: before-pr
+          - variant: dbcycle
+            lib: current
+          - variant: dart_finalizer
+            lib: current
+          - variant: raw_openclose
+            lib: current
+          - variant: raw_nativefin
+            lib: current
+    name: windows / ${{ matrix.variant }} / ${{ matrix.lib }}
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v7
       with:
         persist-credentials: false
+        fetch-depth: 0
+    - name: Use library code from before the finalizer PR
+      if: matrix.lib == 'before-pr'
+      shell: bash
+      run: git checkout e8378dd -- sqlite3/lib
     - uses: dart-lang/setup-dart@v1
       with:
         sdk: stable
     - run: dart pub get
     - name: Use system SQLite
-      run: dart run tool/hook_overrides.dart ${{ matrix.sqlite }}
+      run: dart run tool/hook_overrides.dart system-os-specific
     - name: Kill loop, 6 runs of 5000 kills
       shell: bash
       working-directory: sqlite3/
       run: |
-        dart compile kernel tool/isolate_kill_repro.dart -o repro.dill 2>/dev/null || true
         crashes=0
         for i in $(seq 1 6); do
           if ! dart run tool/isolate_kill_repro.dart ${{ matrix.variant }} 5000 > run_$i.txt 2>&1; then
@@ -42,4 +55,4 @@ jobs:
             tail -1 run_$i.txt
           fi
         done
-        echo "RESULT ${{ matrix.variant }}: $crashes of 6 runs crashed (30000 kills)"
+        echo "RESULT ${{ matrix.variant }}/${{ matrix.lib }}: $crashes of 6 runs crashed (30000 kills)"
