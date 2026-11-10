@@ -1,0 +1,62 @@
+name: Repro isolate kill crash
+
+on:
+  push:
+    branches: [repro/windows-isolate-kill]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        dart: [dev, stable]
+    name: ${{ matrix.os }} / Dart ${{ matrix.dart }}
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+    - uses: dart-lang/setup-dart@v1
+      with:
+        sdk: ${{ matrix.dart }}
+    - run: dart pub get
+    - name: Use system SQLite
+      run: dart run tool/hook_overrides.dart system-os-specific
+    - name: Isolate-kill test alone, 40 times
+      shell: bash
+      working-directory: sqlite3/
+      run: |
+        fails=0
+        for i in $(seq 1 40); do
+          if ! dart test test/ffi/isolate_kill_test.dart -r expanded > out_$i.txt 2>&1; then
+            fails=$((fails+1))
+            echo "::warning::run $i failed"
+            tail -25 out_$i.txt
+          fi
+        done
+        echo "alone: $fails of 40 runs failed"
+        echo "ALONE_FAILS=$fails" >> "$GITHUB_ENV"
+    - name: Whole ffi suite, 8 times
+      shell: bash
+      working-directory: sqlite3/
+      run: |
+        fails=0
+        for i in $(seq 1 8); do
+          if ! dart test test/ffi --test-randomize-ordering-seed random -r expanded > suite_$i.txt 2>&1; then
+            fails=$((fails+1))
+            echo "::warning::suite run $i failed"
+            tail -25 suite_$i.txt
+          fi
+        done
+        echo "suite: $fails of 8 runs failed"
+        echo "SUITE_FAILS=$fails" >> "$GITHUB_ENV"
+    - name: Summary
+      shell: bash
+      run: |
+        echo "alone=$ALONE_FAILS/40 suite=$SUITE_FAILS/8"
+        test "$ALONE_FAILS" = 0 && test "$SUITE_FAILS" = 0
